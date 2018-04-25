@@ -1,0 +1,85 @@
+```{r}
+```{r setup, message = FALSE, warning = FALSE, echo = FALSE, include = FALSE}
+
+knitr::opts_chunk$set(echo = FALSE)
+
+library(tidyverse)
+library(RODBC)
+```
+
+```{r get data from sql}
+
+dsn <- "VhaCdwDwhSql33.vha.med.va.gov"
+con <- odbcConnect(dsn, uid = "",  pwd = "")
+query <- c("
+SELECT
+  PatientSSN,
+  PatientLastName,
+  PatientFirstName,
+  ArrivalDate,
+  VitalsDate,
+  VitalsTime,
+  VitalType,
+  Systolic,
+  Result
+
+FROM
+  (
+  SELECT DISTINCT
+    SPat.PatientSSN AS PatientSSN,
+    SPat.PatientLastName AS PatientLastName,
+    SPat.PatientFirstName AS PatientFirstName,
+    CAST(EDIS.PatientArrivalDateTime AS date) AS ArrivalDate,
+    CAST(Vitals.VitalSignEnteredDateTime AS date) AS VitalsDate,
+    CAST(Vitals.VitalSignEnteredDateTime AS time) AS VitalsTime,
+    VitalType.VitalType AS VitalType,
+    Vitals.Systolic AS Systolic,
+    Vitals.VitalResult AS Result
+  
+  FROM
+    LSV.SPatient.SPatient AS SPat
+    INNER JOIN LSV.EDIS.EDISlog AS EDIS
+      ON SPat.PatientSID = EDIS.PatientSID
+  	  AND SPat.Sta3n = EDIS.Sta3n
+    INNER JOIN LSV.Vital.VitalSign AS Vitals
+      ON EDIS.PatientSID = Vitals.PatientSID
+  	  AND EDIS.Sta3n = Vitals.Sta3n
+	  AND EDIS.LocationSID = Vitals.LocationSID
+    INNER JOIN LSV.Dim.VitalType AS VitalType
+      ON Vitals.VitalTypeSID = VitalType.VitalTypeSID
+  	  AND Vitals.Sta3n = VitalType.Sta3n
+  
+  WHERE
+    SPat.PatientSSN IN ('')
+    AND SPat.Sta3n = '612'
+    AND EDIS.PatientArrivalDateTime >=  DATEADD(day, -30, GETDATE())
+    AND Vitals.VitalSignEnteredDateTime BETWEEN EDIS.PatientArrivalDateTime AND DATEADD(hour, +1, EDIS.PatientArrivalDateTime)
+    AND VitalType.VitalType IN ('PULSE', 'TEMPERATURE', 'RESPIRATION', 'BLOOD PRESSURE')
+
+  GROUP BY
+      SPat.PatientSSN,SPat.PatientLastName,SPat.PatientFirstName,EDIS.PatientArrivalDateTime,Vitals.VitalSignEnteredDateTime,Vitals.VitalSignEnteredDateTime,VitalType.VitalType,Vitals.Systolic,Vitals.VitalResult
+  ) AS InnerQ
+
+WHERE
+  ArrivalDate = VitalsDate
+  
+GROUP BY
+  PatientSSN, PatientLastName, PatientFirstName, ArrivalDate, VitalsDate, VitalsTime, VitalType, Systolic, Result
+")
+backup_dat <- sqlQuery(con, query)
+odbcCloseAll()
+rm('con', 'dsn', 'query')
+```
+
+```{r data manipulation}
+
+dat <- backup_dat
+
+dat$value <- as.character(dat$Result) %>% sapply( function(x) { if (!grepl("/",as.character(x))) x else strsplit(x,'/')[[1]][1]}) %>% as.numeric()
+
+dat <- select(dat, -Systolic, -Result)
+dat <- backup_dat 
+dat <- as_tibble(dat)
+dat$VitalsTime[1] <- "09:31:22.0000000"
+dat <- dat %>% spread(dat, key = VitalType, value = value, convert = TRUE)
+
